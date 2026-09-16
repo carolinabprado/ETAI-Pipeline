@@ -9,6 +9,8 @@ Week 2: 16/Sept Practical Class
   
   
   ex: logistic regression results
+      
+      
       Train accuracy: 0.829
       Test accuracy:  0.625
       Gap (train - test): +0.204  
