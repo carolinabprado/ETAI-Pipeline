@@ -1,3 +1,18 @@
+Carolina B. Prado - 20260528
+
+
+Week 2: 16/Sept Practical Class
+  Tested out "decision_tree" and "logistic_regression"
+  - Logistic Regression is better as the Decision Tree model overfits the model a lot
+  ex: logistic regression results
+      Train accuracy: 0.829
+      Test accuracy:  0.625
+      Gap (train - test): +0.204  
+    decision tree results
+      Train accuracy: 0.680
+      Test accuracy:  0.678
+      Gap (train - test): +0.002
+
 # Baseline Predictive Pipeline -- ETAI
 
 This is the **starting point** for your semester project: a small but *complete* predictive pipeline -- every piece a real project needs (entry point, config, data loading, preprocessing, model, evaluation), just kept as simple as possible for now.
