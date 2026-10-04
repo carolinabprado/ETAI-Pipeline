@@ -23,31 +23,43 @@ Week 2: 16/Sept Practical Class
 
 
 Week 3: 23/Sept Practical Class
+
   Learned how to run a diagnosis in our dataset and pre process (cleaning the data)
   ex on the results:
+  
     logistic_regression results
       Train accuracy: 0.676
       Test accuracy:  0.657
       Gap (train - test): +0.019
+      
     decision tree results
       Train accuracy: 0.792
       Test accuracy:  0.611
       Gap (train - test): +0.180
+      
   With the preprocessing, the decision tree is still overfitting the model, and the logistic regression results is generalizing very well.
 
 Week 4: 30/Sept Practical Class
+
+
   Changed the evaluation to 5-fold cross-validation and kept a locked test set apart (20%, not evaluated yet)
   Chose target encoder + robust scaler for the preprocessing (standard and robust scaler tied, so either works)
   Added a fairness check: false positive rate (FPR) by race, compared to COMPAS's own score
   ex on the results:
+
+  
     logistic_regression results (5-fold CV)
       Train accuracy: 0.675
       Validation accuracy: 0.673 (std 0.014)
       Gap (train - validation): +0.002
+
+      
     false positive rate by race (people who did not reoffend but were predicted to)
       African-American   my model: 0.26   COMPAS: 0.45
       Caucasian          my model: 0.13   COMPAS: 0.23
       Hispanic           my model: 0.15   COMPAS: 0.23
+
+      
   The logistic regression is generalizing very well (train and validation almost the same).
   My model makes fewer false positives than COMPAS, but African-American defendants are still wrongly flagged about 2x more than Caucasian defendants, even without race as a feature.
 
