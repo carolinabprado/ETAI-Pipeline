@@ -18,6 +18,10 @@ def save_run(results_dir: str, config: dict, report_text: str) -> str:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     path = os.path.join(results_dir, f"run_{timestamp}.txt")
 
+    tuning = config.get("tuning", {})
+    tuning_line = (f"Tuning: n_trials={tuning['n_trials']}  n_splits={tuning['n_splits']}  "
+               f"random_state={tuning['random_state']}\n") if tuning.get("enabled") else "Tuning: disabled\n"
+    
     cv = config["cv"]
     header = (
         f"Run: {timestamp}\n"
@@ -28,6 +32,7 @@ def save_run(results_dir: str, config: dict, report_text: str) -> str:
         f"random_state={cv.get('random_state')}  metric={cv.get('scoring', 'accuracy')}\n"
         f"Locked test set: size={config['test_set']['size']}  "
         f"random_state={config['test_set']['random_state']}  (not evaluated)\n"
+        f"{tuning_line}"
         + "=" * 60 + "\n\n"
     )
 
