@@ -13,7 +13,7 @@ the empirical grid that picked this week's `config.yaml`-recorded encoder/scaler
 Two things every function here respects, on purpose:
   - leak-safe: `clean_dataset` and `split_features_target` are target- and
     split-independent, so they're safe to run on the whole dataset before splitting.
-    `split_train_test` is the boundary line -- everything after it (imputation,
+    `split_dev_test` is the boundary line -- everything after it (imputation,
     encoding, scaling, inside `build_preprocessor`'s ColumnTransformer) is fit only on
     the training fold, never on data it's about to be evaluated against.
   - deployable from day one: every function up to (not including) the split is
@@ -25,9 +25,9 @@ import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, StandardScaler, MinMaxScaler, RobustScaler
-from category_encoders import CountEncoder, TargetEncoder
+from sklearn.model_selection import  train_test_split, StratifiedKFold
+from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, TargetEncoder, StandardScaler, MinMaxScaler, RobustScaler
+from category_encoders import CountEncoder
 
 def flag_invalid_values(df: pd.DataFrame, rules: dict) -> pd.DataFrame:
     """
@@ -67,7 +67,7 @@ def _canonicalize_categories(df: pd.DataFrame, columns_and_maps: dict, placehold
 def clean_dataset(df: pd.DataFrame, diagnostics_config: dict) -> pd.DataFrame:
     """
     Applies this week's diagnosis: category cleanup, domain-rule/placeholder -> NaN
-    conversion, de-duplication, and redundant-column removal. Target-agnostic -- safe
+    conversion, Row-preserving: every input row comes out, in the same order. Target-agnostic -- safe
     to call on label-free inference data, since none of this depends on a target column.
     """
     out = df.copy()
@@ -81,11 +81,6 @@ def clean_dataset(df: pd.DataFrame, diagnostics_config: dict) -> pd.DataFrame:
     flag_invalid_values(out, diagnostics_config.get("validity_rules", {}))
 
     out = _canonicalize_categories(out, diagnostics_config.get("canonical_categories", {}), placeholder_tokens)
-
-    out = out.drop_duplicates()
-    id_column = diagnostics_config.get("id_column")
-    if id_column and id_column in out.columns:
-        out = out.drop_duplicates(subset=id_column, keep="first")
 
     columns_to_drop = [c for c in diagnostics_config.get("redundant_columns", []) if c in out.columns]
     out = out.drop(columns=columns_to_drop)
@@ -136,35 +131,14 @@ def split_features_target(df: pd.DataFrame, data_config: dict, mnar_indicator_so
     X = df[feature_cols]
     return X, y, extras
 
-def split_features_target(df: pd.DataFrame, data_config: dict, mnar_indicator_sources: list):
-    """
-    Returns (X, y, extras). `y` is `None` and `extras` has no target column when called
-    on label-free inference data -- nothing downstream requires the target to be present.
-    """
-    target = data_config["target"]
-    sensitive_attr = data_config["sensitive_attr"]
-    drop_columns = data_config.get("drop_columns", [])
-
-    df = add_missingness_indicators(df, mnar_indicator_sources)
-    y = df[target] if target in df.columns else None
-
-    extras_cols = [c for c in [sensitive_attr, "score_text"] if c in df.columns]
-    extras = df[extras_cols].copy() if extras_cols else None
-
-    always_drop = set(drop_columns) | {target, sensitive_attr}
-    feature_cols = [c for c in df.columns if c not in always_drop]
-    X = df[feature_cols]
-    return X, y, extras
-
 
 _SCALERS = {"none": "passthrough", "standard": StandardScaler, "minmax": MinMaxScaler, "robust": RobustScaler}
 _ENCODERS = {
-    "onehot": lambda: OneHotEncoder(handle_unknown="ignore", sparse_output=False),
-    "ordinal": lambda: OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1),
-    "count": lambda: CountEncoder(handle_unknown=0, handle_missing=0),
-    "target": lambda: TargetEncoder(handle_unknown="value", handle_missing="value"),
+    "onehot": lambda seed: OneHotEncoder(handle_unknown="ignore", sparse_output=False),
+    "ordinal": lambda seed: OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1),
+    "count": lambda seed: CountEncoder(handle_unknown=0, handle_missing=0),
+    "target": lambda seed: TargetEncoder(target_type="binary", cv=StratifiedKFold(5, shuffle=True, random_state=seed)),
 }
-
 
 def build_preprocessor(preprocessing_config: dict) -> ColumnTransformer:
     """
@@ -183,7 +157,7 @@ def build_preprocessor(preprocessing_config: dict) -> ColumnTransformer:
 
     scaler_factory = _SCALERS[scaler_name]
     scaler = scaler_factory() if callable(scaler_factory) else scaler_factory
-    encoder = _ENCODERS[encoder_name]()
+    encoder = _ENCODERS[encoder_name](preprocessing_config.get("random_state"))
 
     numeric_pipeline = Pipeline([
         ("impute", SimpleImputer(strategy=imputation.get("numeric_strategy", "median"))),

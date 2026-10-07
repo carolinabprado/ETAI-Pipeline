@@ -61,8 +61,7 @@ diagnostics:
   redundant_columns: ["prior_offenses", "age_in_months", "juvenile_total"]
 
 # New this week (see Practical/W3/notebooks/02_preprocessing.ipynb): this week's diagnosis-driven,
-# leak-safe preprocessing recipe. encoder/scaler chosen by the empirical grid in that notebook --
-# don't hand-pick a different pair here without re-running the grid.
+# leak-safe preprocessing recipe. encoder/scaler chosen by hand
 preprocessing:
   encoder: "target"      # winner of the 4x4 empirical grid (onehot/ordinal/count/target x none/standard/minmax/robust),
   scaler: "robust"     # scored on accuracy across 15 repeated splits -- see 02_preprocessing.ipynb's grid + paired check
