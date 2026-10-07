@@ -14,13 +14,12 @@ This orchestrates the full pipeline:
 """
 import yaml
 from sklearn.model_selection import StratifiedKFold
-from sklearn.pipeline import Pipeline
-
+from src.model import build_pipeline
+from src.tuning import tune_pipeline, nested_cross_validate, tuning_report
 from src.data import load_data
 from src.preprocessing import (
-    clean_dataset, drop_duplicate_rows, split_features_target, build_preprocessor, split_dev_test,
+    clean_dataset, drop_duplicate_rows, split_features_target, split_dev_test,
 )
-from src.model import build_model
 from src.evaluate import (
     cross_validate_pipeline, cv_report, oof_classification_report, fairness_report,
 )
@@ -54,12 +53,7 @@ def main():
         random_state=config["test_set"]["random_state"],
     )
 
-    # preprocessing lives INSIDE the pipeline, so cross-validation re-fits it on the
-    # training part of every fold -- the validation fold never leaks into its own preprocessing
-    pipeline = Pipeline([
-        ("prep", build_preprocessor(config["preprocessing"])),
-        ("model", build_model(config["model"])),
-    ])
+    pipeline = build_pipeline(config["preprocessing"], config["model"])
 
     # a fixed random_state = the same folds on every run and for every model, so comparing
     # two models' fold scores is a like-for-like (paired) comparison
@@ -75,6 +69,32 @@ def main():
     )
 
     report = cv_report(fold_scores, scoring)
+    # week 5: hyperparameter tuning -- development set only, every candidate scored by
+    # CV of the whole pipeline (see src/tuning.py)
+    tuning_config = config.get("tuning", {})
+    if tuning_config.get("enabled", False):
+        model_type = config["model"]["type"]
+        search_spaces = tuning_config.get("search_spaces") or {}
+        if model_type not in search_spaces:
+            raise ValueError(f"tuning.enabled is true but config.yaml has no search space for "
+                             f"'{model_type}'. Options: {list(search_spaces)}")
+        search_space = search_spaces[model_type]
+        n_trials = tuning_config["n_trials"]
+        tuning_seed = tuning_config["random_state"]
+        n_jobs = cv_config.get("n_jobs", 1)
+        inner_cv = StratifiedKFold(n_splits=tuning_config["n_splits"], shuffle=True, random_state=tuning_seed)
+
+        # 1. the honest estimate (its out-of-fold predictions replace the untuned ones)
+        nested_scores, y_oof = nested_cross_validate(
+            pipeline, X_dev, y_dev, cv, inner_cv, scoring, search_space, n_trials, tuning_seed, n_jobs=n_jobs
+        )
+        print("\nNested cross-validation (tuned):")
+        report += "\n\nNested cross-validation (tuned):\n" + cv_report(nested_scores, scoring)
+        # 2. the hyperparameters we keep: the same procedure, once, on the whole development set
+        pipeline, study = tune_pipeline(
+            pipeline, X_dev, y_dev, inner_cv, scoring, search_space, n_trials, tuning_seed, n_jobs=n_jobs
+        )
+        report += "\n\n" + tuning_report(study, nested_scores, scoring)
     report += "\n\n" + oof_classification_report(y_dev, y_oof)
     report += "\n" + fairness_report(
         y_dev, y_oof, extras_dev, sensitive_attr=config["data"]["sensitive_attr"]

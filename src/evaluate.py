@@ -88,12 +88,13 @@ def fairness_report(y_true, y_pred, extras: pd.DataFrame, sensitive_attr: str = 
           prediction), on the same rows, for comparison
     """
     df = extras.copy()
+    df[sensitive_attr] = df[sensitive_attr].astype(object).fillna("unknown")
     df["y_true"] = pd.Series(y_true).values
     df["y_pred_model"] = y_pred
     df["y_pred_compas"] = (df["score_text"] != "Low").astype(int)
 
     lines = [
-        "False positive rate by race (development set, out-of-fold)",
+        f"False positive rate by {sensitive_attr} (development set, out-of-fold)",
         "(share of people who did NOT reoffend, but were predicted to)",
         "",
     ]

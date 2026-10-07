@@ -18,7 +18,7 @@ Week 2: 16/Sept Practical Class
     
     decision tree results
       Train accuracy: 0.829
-      Test accuracy:  0.829
+      Test accuracy:  0.629
       Gap (train - test): +0.199
 
 
@@ -43,7 +43,7 @@ Week 4: 30/Sept Practical Class
 
 
   Changed the evaluation to 5-fold cross-validation and kept a locked test set apart (20%, not evaluated yet)
-  Chose target encoder + robust scaler for the preprocessing (standard and robust scaler tied, so either works)
+  Chose target encoder + robust scaler for the preprocessing 
   Added a fairness check: false positive rate (FPR) by race, compared to COMPAS's own score
   ex on the results:
 
@@ -62,6 +62,25 @@ Week 4: 30/Sept Practical Class
       
   The logistic regression is generalizing very well (train and validation almost the same).
   My model makes fewer false positives than COMPAS, but African-American defendants are still wrongly flagged about 2x more than Caucasian defendants, even without race as a feature.
+
+
+Week 5: 07/Oct Practical Class
+
+  Added hyperparameter tuning with Optuna (TPE sampler), on the development set only, every candidate scored by 5-fold CV of the whole pipeline
+  Added nested cross-validation to get an honest score for the tuned model (the best trial's score is optimistic)
+  The fairness check now also shows people with unknown race ("unknown", 66 people) instead of silently dropping them
+  ex on the results:
+
+    decision tree (nested CV, tuned)
+      Default: 0.611 (std 0.015), gap +0.084
+      Tuned:   0.675 (std 0.020), gap +0.009
+      Chosen: max_depth 9, min_samples_leaf 101, gini
+
+  Tuning fixed the decision tree's overfitting: forcing every leaf to hold ~100 people stops it from memorising individuals.
+  After tuning, decision tree, random forest and logistic regression are all tied (0.673-0.678, within one std).
+
+
+
 
 # Baseline Predictive Pipeline -- ETAI
 
@@ -105,6 +124,7 @@ This table is updated after each practical class, so you can always see what cha
 | 2 | Introduction & baseline pipeline | Initial version: project structure, a single naive train/test split (no cross-validation), minimal preprocessing (drop rows with missing values, one-hot encode categoricals), logistic regression baseline, a first (deliberately simple) fairness check comparing our model's and COMPAS's own false-positive rate by race, train-vs-test accuracy reporting (to start spotting overfitting), and each run's full report saved automatically to `results/` |
 | 3 | EDA + preprocessing -- diagnose the data, then fix it | `src/data_diagnostics.py` (missingness-mechanism test via chi-square + Cramér's V, domain-rule invalid-value detection, two-way duplicate check) and `src/preprocessing.py` (leak-safe category cleanup, mechanism-matched imputation with `_was_missing` indicators for MNAR columns, a deployable `ColumnTransformer`, **and** the train/test split itself, all in the one file rather than split across two) replace the old naive `dropna()`/`pd.get_dummies()` preprocessing; encoder/scaler pair (count encoding + robust scaling) chosen by an empirical grid over 15 repeated splits, checked against the runner-up with a paired comparison so the win isn't just noise; three redundant columns (found via correlation + VIF) dropped; `config.yaml` gains `diagnostics` and `preprocessing` sections -- see "Preprocessing decisions" below. |
 | 4 | Cross-validation -- evaluating a model honestly | Locked final test set (20%, stratified, seed 42, never evaluated) via `split_dev_test()`; stratified 5-fold CV of the **whole** pipeline (preprocessing inside every fold) on the development set, reporting train/validation/gap per fold with mean ± std (`src/evaluate.py`); classification report and fairness check now computed on out-of-fold predictions; final model refit on all development rows; `clean_dataset()` made row-preserving with de-duplication moved to the training-only `drop_duplicate_rows()`; sklearn's `TargetEncoder` (internal cross-fitting) replaces `category_encoders`'; target + robust scaling chosen by hand; `src/model.py` gains `dummy` and `random_forest`; `config.yaml` gains `test_set` and `cv` sections; `data_diagnostics.py` moved to `src/bin/` (EDA-only, not used by `main.py`). |
+| 5 | Hyperparameter tuning | New `src/tuning.py`: `tune_pipeline()` (Optuna study with a seeded TPE sampler, every trial = 5-fold CV of the whole pipeline on the development set), `nested_cross_validate()` (honest estimate of the tuning procedure: inner folds choose, outer folds judge) and `tuning_report()` (best trials + optimism check); `build_pipeline()` in `src/model.py` is now the single place where preprocessing + model are assembled; `config.yaml` gains a `tuning` section with one search space per model; `main.py` runs nested CV, then tunes on all development rows and refits the tuned pipeline; the fairness report shows rows with unknown race as "unknown"; `optuna` added to `requirements.txt`. |
 
 ## Preprocessing decisions
 
@@ -138,6 +158,21 @@ The final test set (20% of the data, stratified, seed 42) is locked: it is never
 | Random forest | — | 0.652 ± 0.017 | +0.080 |
 
 I trust the CV numbers more than the week 3 holdout: they use every development row for validation and come with a standard deviation (~1.5 points), which shows how much a single split can move the score. The week 2/3 conclusion still holds: logistic regression is the best model, about 2 points ahead of the random forest (more than one std), and it doesn't overfit (gap ≈ 0). Both tree-based models overfit by ~8 points with default hyperparameters, which is what week 5's tuning will address. The decision tree's gap dropped from 0.180 (W3) to 0.084, most likely because sklearn's `TargetEncoder` cross-fits its encoding instead of leaking the target into the training rows. All models beat the dummy baseline (0.549).
+
+
+### Hyperparameter tuning
+
+Hyperparameters are chosen with Optuna (TPE sampler, seed 42) on the development set only: each trial sets one candidate on a fresh copy of the whole pipeline and scores it by stratified 5-fold CV, so imputation, encoding and scaling are re-fit inside every fold of every trial, and every trial uses the same folds. The locked test set is never touched. Because the best trial's score is the maximum of many noisy scores, it is optimistic: the number reported is from **nested cross-validation** -- for each of the 5 outer folds, the whole tuning is run on the other 4 and the winner is scored on the held-out fold. The hyperparameters kept are from the same tuning run once on all development rows. Decision tree and logistic regression: 30 trials; random forest: 15 trials (each trial is ~100× slower).
+
+| Model | Default: CV mean ± std | Tuned: nested CV mean ± std | Tuning score (best trial) | Optimism | Chosen hyperparameters |
+|---|---|---|---|---|---|
+| Decision tree | 0.611 ± 0.015 | 0.675 ± 0.020 | 0.680 | −0.000 | `max_depth=9`, `min_samples_leaf=101`, `criterion=gini` |
+| Logistic regression | 0.672 ± 0.013 | 0.673 ± 0.016 | 0.678 | +0.002 | `C=0.072` |
+| Random forest | 0.652 ± 0.017 | 0.678 ± 0.013 | 0.682 | +0.003 | `n_estimators=151`, `max_depth=8`, `min_samples_leaf=26`, `max_features=log2` |
+
+The tree-based models gained the most from tuning (+6.4 points for the decision tree, +2.6 for the random forest, both well above the fold-to-fold std), and their overfitting disappeared (train–validation gap from ~0.08 to ~0.01): large minimum leaf sizes stop them from memorising individual people. Logistic regression gained nothing -- a linear model on a few features with ~5,800 rows has little variance for regularisation to remove. Tuning changed the ranking: all three models are now within half a point of each other, less than one standard deviation, so no model is clearly best on accuracy. I would report the nested CV score (e.g. 0.673 ± 0.016 for logistic regression), not the best trial's score, since only the nested one comes from rows that took no part in choosing the hyperparameters. With accuracy tied, logistic regression remains my choice: it has the lowest false positive rates in every group (African-American 0.25, Caucasian 0.12) and its coefficients are directly interpretable -- though, like every model here, it still wrongly flags African-American defendants about twice as often as Caucasian ones.
+
+
 
 ## Environment setup
 
