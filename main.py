@@ -18,7 +18,7 @@ from src.model import build_pipeline
 from src.tuning import tune_pipeline, nested_cross_validate, tuning_report
 from src.data import load_data
 from src.preprocessing import (
-    clean_dataset, drop_duplicate_rows, split_features_target, split_dev_test,
+    clean_dataset, drop_duplicate_rows, split_features_target, split_dev_test, add_engineered_features
 )
 from src.evaluate import (
     cross_validate_pipeline, cv_report, oof_classification_report, fairness_report,
@@ -40,6 +40,7 @@ def main():
     df_clean = clean_dataset(df_raw, config["diagnostics"])          # row-preserving: also safe for new data
     # training data only: the same person must not count twice, or sit in both dev and test
     df_clean = drop_duplicate_rows(df_clean, config["diagnostics"].get("id_column"))
+    df_clean = add_engineered_features(df_clean)
 
     mnar_sources = config["preprocessing"].get("mnar_indicator_sources", [])
     X, y, extras = split_features_target(df_clean, config["data"], mnar_sources)
