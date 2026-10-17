@@ -192,3 +192,15 @@ def split_dev_test(X, y, extras, test_size: float, random_state: int):
         X, y, extras, test_size=test_size, random_state=random_state, stratify=y
     )
     return X_dev, X_test, y_dev, y_test, extras_dev, extras_test
+
+def add_engineered_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Fixed formulas only -- nothing is learned from the data, so this is safe before the split."""
+    out = df.copy()
+    out["priors_per_adult_year"] = out["priors_count"] / (out["age"] - 17).clip(lower=1)   # NaN stays NaN -> imputed later
+    # juvenile record: a flag and the felony share -- not the sum itself, which is the
+    # `juvenile_total` dropped in week 3 as redundant (VIF). min_count=3: any NaN count -> NaN
+    juv_total = out[["juv_fel_count", "juv_misd_count", "juv_other_count"]].sum(axis=1, min_count=3)
+    out["has_juvenile_record"] = (juv_total > 0).astype(float).where(juv_total.notna())
+    # share of juvenile offences that were felonies; 0 with no juvenile record (denominator guarded)
+    out["juv_felony_share"] = (out["juv_fel_count"] / juv_total.where(juv_total > 0)).fillna(0).where(juv_total.notna())
+    return out
