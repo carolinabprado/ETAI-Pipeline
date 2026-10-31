@@ -108,6 +108,23 @@ Week 6: 14/Oct Practical Class
 
 
 
+Week 7 31/Oct 
+Added three new models: gradient boosting, HistGradientBoosting (the same algorithm on binned features, much faster) and Naive Bayes (a fast probabilistic baseline)
+  Changed how every model is judged: the pipeline now keeps out-of-fold probabilities (not just yes/no) and reports 8 metrics, but tunes and ranks on one: ROC-AUC
+  Added a no-model floor (a dummy on the same folds) and a scoreboard (results/runs.csv): every run is kept with its untuned score, tuned score and floor
+  The results file now has a confusion matrix
+  ex on the results (ROC-AUC, nested CV, tuned):
+    gradient boosting
+      Untuned: 0.726
+      Tuned:   0.727 (std 0.013)
+      Chosen: n_estimators 480, learning_rate 0.016, max_depth 2, subsample 0.61
+    decision tree
+      Untuned: 0.582
+      Tuned:   0.719 (std 0.012)
+  Tuning matters most for the models that overfit by default (decision tree +0.14, both forests +0.04); the boosters and logistic regression were already good untuned.
+  The top 5 (both forests, AdaBoost, both boosters) are all at 0.726-0.727: the corrected paired t-test can't separate them (p > 0.5). Logistic regression is only 0.004 behind.
+
+
 # Baseline Predictive Pipeline -- ETAI
 
 This is the **starting point** for your semester project: a small but *complete* predictive pipeline -- every piece a real project needs (entry point, config, data loading, preprocessing, model, evaluation), just kept as simple as possible for now.
@@ -186,6 +203,27 @@ The final test set (20% of the data, stratified, seed 42) is locked: it is never
 | Random forest | — | 0.652 ± 0.017 | +0.080 |
 
 I trust the CV numbers more than the week 3 holdout: they use every development row for validation and come with a standard deviation (~1.5 points), which shows how much a single split can move the score. The week 2/3 conclusion still holds: logistic regression is the best model, about 2 points ahead of the random forest (more than one std), and it doesn't overfit (gap ≈ 0). Both tree-based models overfit by ~8 points with default hyperparameters, which is what week 5's tuning will address. The decision tree's gap dropped from 0.180 (W3) to 0.084, most likely because sklearn's `TargetEncoder` cross-fits its encoding instead of leaking the target into the training rows. All models beat the dummy baseline (0.549).
+### Metrics and the scoreboard
+
+From week 7 every run keeps the out-of-fold probability of reoffending for each development row and reports eight metrics from it, but it is tuned and ranked on one **selection metric**, chosen before comparing models.
+
+**Selection metric: ROC-AUC.** COMPAS is used as a risk score to rank defendants, and ROC-AUC measures exactly that: the probability that a random reoffender gets a higher score than a random non-reoffender, over every threshold at once. Where to draw the line (0.5 or anything else) is a separate decision about which error is worse, and it should not be baked into how the model is chosen. ROC-AUC is also less noisy than accuracy across folds, so paired comparisons between models can actually see differences.
+
+Same rules as before: development set only, stratified 5-fold CV on the same folds, Optuna with 30 trials and 5 inner folds, nested CV for every tuned number, engineered features included. "Untuned" is the same model with its `config.yaml` params, scored by plain CV; the floor is a dummy on the same folds. The last column compares the best model (oblique random forest) with each of the others using the corrected paired t-test (Nadeau & Bengio) on the 5 fold scores.
+
+| Model | Untuned: CV ROC-AUC | Tuned: nested CV ROC-AUC (mean ± std) | Floor | Best vs this model: difference, folds won, p |
+|---|---|---|---|---|
+| Oblique random forest | 0.682 | 0.727 ± 0.013 | 0.500 | — |
+| Gradient boosting | 0.726 | 0.727 ± 0.013 | 0.500 | +0.000, 3/5, p = 0.91 |
+| AdaBoost | 0.722 | 0.726 ± 0.012 | 0.500 | +0.001, 4/5, p = 0.59 |
+| HistGradientBoosting | 0.714 | 0.726 ± 0.014 | 0.500 | +0.001, 3/5, p = 0.79 |
+| Random forest | 0.682 | 0.726 ± 0.014 | 0.500 | +0.001, 4/5, p = 0.62 |
+| Logistic regression | 0.723 | 0.723 ± 0.012 | 0.500 | +0.004, 5/5, p = 0.08 |
+| Naive Bayes | 0.695 | 0.721 ± 0.010 | 0.500 | +0.006, 5/5, p = 0.09 |
+| Decision tree | 0.582 | 0.719 ± 0.012 | 0.500 | +0.008, 5/5, p = 0.05 |
+| Dummy | 0.500 | — | 0.500 | — |
+
+Tuning matters most where the defaults overfit: the decision tree goes from 0.582 to 0.719 and both forests from 0.682 to ~0.726, because large minimum leaf sizes (44–153 people) stop them from memorising individuals. The boosters and logistic regression were already close to their best with default settings (gains of 0.000–0.012). Tuned, the five ensembles land within 0.001 of each other, far less than the fold-to-fold std (~0.013), and the corrected test cannot separate any of them (p > 0.5). Logistic regression, Naive Bayes and the decision tree are slightly behind and lose in all 5 folds, but only the decision tree's gap is borderline significant (p = 0.05); logistic regression is just 0.004 behind (p = 0.08). The conclusion from weeks 5–6 holds with a better metric: the limit is the information in these features, not the model. Since no ensemble is reliably better, logistic regression's small loss in ranking buys a model that is much easier to explain, which matters for a tool used in court decisions.
 
 
 ### Hyperparameter tuning
