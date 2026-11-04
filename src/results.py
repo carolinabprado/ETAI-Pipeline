@@ -29,7 +29,13 @@ def save_run(results_dir: str, run: str, config: dict, report_text: str) -> str:
     tuning = config.get("tuning", {})
     tuning_line = (f"Tuning: n_trials={tuning['n_trials']}  n_splits={tuning['n_splits']}  "
                    f"random_state={tuning['random_state']}\n") if tuning.get("enabled") else "Tuning: disabled\n"
-
+    
+    selection = config.get("feature_selection") or {}
+    selection_line = (f"Feature selection: VoteSelector  min_votes={selection.get('min_votes', 2)}  "
+                      f"random_state={selection.get('random_state')}"
+                      + ("  (min_votes tuned)" if tuning.get("enabled") else "") + "\n"
+                      ) if selection.get("enabled") else "Feature selection: off\n"
+    
     cv = config["cv"]
     header = (
         f"Run: {run}\n"
@@ -42,6 +48,7 @@ def save_run(results_dir: str, run: str, config: dict, report_text: str) -> str:
         f"Locked test set: size={config['test_set']['size']}  "
         f"random_state={config['test_set']['random_state']}  (not evaluated)\n"
         f"{tuning_line}"
+        f"{selection_line}"
         + "=" * 60 + "\n\n"
     )
 
