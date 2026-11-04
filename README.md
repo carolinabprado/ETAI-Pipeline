@@ -125,6 +125,30 @@ Added three new models: gradient boosting, HistGradientBoosting (the same algori
   The top 5 (both forests, AdaBoost, both boosters) are all at 0.726-0.727: the corrected paired t-test can't separate them (p > 0.5). Logistic regression is only 0.004 behind.
 
 
+
+
+  Week 8: 04/Nov Practical Class
+
+  Added XGBoost: gradient boosting with extra brakes inside every split (gamma, reg_alpha, reg_lambda, min_child_weight), tuned with its own search space
+  Added feature selection as a step of the pipeline, between preprocessing and the model: a VoteSelector where a random forest, gradient boosting and an L1 logistic regression vote, and a feature is kept with at least min_votes votes (tuned, 1 to 3)
+  Selection is learned from the labels, so it is re-fit inside every fold (selecting on all rows first can make pure noise look like a good model)
+  The pipeline caches the fitted preprocessing + selection steps during a run, so tuning the model doesn't refit them every trial
+  The scoreboard and the results file now record the feature-selection setting, and every run prints the features the final model keeps
+  ex on the results (ROC-AUC, nested CV, tuned):
+    xgboost without selection
+      Untuned: 0.723
+      Tuned:   0.728 (std 0.014)
+      Chosen: n_estimators 120, learning_rate 0.078, max_depth 4, gamma 1.83, reg_alpha 1.67
+    xgboost with selection
+      Untuned: 0.720
+      Tuned:   0.726 (std 0.010)
+      Chosen: n_estimators 403, learning_rate 0.021, max_depth 2, gamma 2.72, min_votes 2
+      Features kept: 3 of 13 (age, priors_count, priors_per_adult_year)
+    with vs without: difference -0.002, folds won 1/5, p = 0.38
+  With only 3 of the 13 features, XGBoost is almost as good (-0.002, well inside the fold-to-fold std of ~0.013), and the corrected test can't tell them apart (p = 0.38).
+  Tuned XGBoost without selection is now the top of the scoreboard (0.728), but it is tied with the other ensembles from week 7 (0.726-0.727).
+
+
 # Baseline Predictive Pipeline -- ETAI
 
 This is the **starting point** for your semester project: a small but *complete* predictive pipeline -- every piece a real project needs (entry point, config, data loading, preprocessing, model, evaluation), just kept as simple as possible for now.
@@ -170,6 +194,8 @@ This table is updated after each practical class, so you can always see what cha
 | 4 | Cross-validation -- evaluating a model honestly | Locked final test set (20%, stratified, seed 42, never evaluated) via `split_dev_test()`; stratified 5-fold CV of the **whole** pipeline (preprocessing inside every fold) on the development set, reporting train/validation/gap per fold with mean ± std (`src/evaluate.py`); classification report and fairness check now computed on out-of-fold predictions; final model refit on all development rows; `clean_dataset()` made row-preserving with de-duplication moved to the training-only `drop_duplicate_rows()`; sklearn's `TargetEncoder` (internal cross-fitting) replaces `category_encoders`'; target + robust scaling chosen by hand; `src/model.py` gains `dummy` and `random_forest`; `config.yaml` gains `test_set` and `cv` sections; `data_diagnostics.py` moved to `src/bin/` (EDA-only, not used by `main.py`). |
 | 5 | Hyperparameter tuning | New `src/tuning.py`: `tune_pipeline()` (Optuna study with a seeded TPE sampler, every trial = 5-fold CV of the whole pipeline on the development set), `nested_cross_validate()` (honest estimate of the tuning procedure: inner folds choose, outer folds judge) and `tuning_report()` (best trials + optimism check); `build_pipeline()` in `src/model.py` is now the single place where preprocessing + model are assembled; `config.yaml` gains a `tuning` section with one search space per model; `main.py` runs nested CV, then tunes on all development rows and refits the tuned pipeline; the fairness report shows rows with unknown race as "unknown"; `optuna` added to `requirements.txt`. |
 | 6 | Ensembles in depth -- random forest, oblique random forest, AdaBoost | `src/model.py` gains `oblique_random_forest()` (a `BaggingClassifier` of oblique trees: `SparseRandomProjection` → `DecisionTreeClassifier`, so every split is a random linear combination of features) and `adaboost()` (`AdaBoostClassifier` over trees of depth `max_depth`, 1 = stumps), both registered in `_MODELS`; `config.yaml`'s `model` section now runs the random forest (`n_estimators: 200`, fixed -- more trees never overfit) with the other models as commented examples, and `tuning.search_spaces` gains `oblique_random_forest` and `adaboost` while the random forest's space is redone (tree size + `max_features`, no longer `n_estimators`); Challenge 1: new `add_engineered_features()` in `src/preprocessing.py`, called in `main.py` before `split_features_target()`, adding three fixed-formula features (`priors_per_adult_year`, `has_juvenile_record`, `juv_felony_share`) listed in `preprocessing.numeric_features`. No new packages. |
+| 7 | Boosting + evaluation metrics | `src/model.py` gains `gradient_boosting`, `hist_gradient_boosting` and `naive_bayes`; `cv.metrics` (8 metrics) and `cv.selection_metric` (ROC-AUC) in `config.yaml`; `src/evaluate.py` keeps out-of-fold probabilities, scores every metric and adds `corrected_paired_test()` (Nadeau & Bengio); tuning and nested CV maximise the selection metric; a no-model floor (dummy, same folds) on every run; `src/results.py` adds the scoreboard (`results/runs.csv`, one row per run) and a confusion matrix in the report. |
+| 8 | XGBoost + feature selection | `src/model.py` gains `xgboost` (`XGBClassifier`) and a `VoteSelector` (random forest, gradient boosting and L1 logistic regression vote; features with at least `min_votes` votes are kept); `build_pipeline()` takes `selection_config` and `memory` and adds a `"select"` step between `"prep"` and `"model"`; `config.yaml` gains a `feature_selection` section (`select__min_votes` tuned with the model) and an `xgboost` search space (incl. `gamma`, `reg_alpha`); `main.py` caches the fitted steps in a temporary folder per run, prints the features kept and adds a `feature_selection` column to the scoreboard; the report header records the selection setting; `xgboost` added to `requirements.txt`. |
 
 ## Preprocessing decisions
 
@@ -269,6 +295,26 @@ If any juvenile count is missing, both juvenile features stay `NaN` and are impu
 | AdaBoost | 0.682 ± 0.016 | 0.677 ± 0.010 | −0.005 | 2 of 5 |
 
 Only logistic regression gains, and consistently (4 of 5 folds), but +0.005 is still smaller than the fold-to-fold std, so it is a hint, not a proven improvement. The tree ensembles don't gain: their differences go both ways across folds, because splits on `age` and `priors_count` together already approximate a rate, while a linear model can't combine two features into a ratio on its own and only benefits if we hand it over. The features also lowered logistic regression's false positive rates (African-American 0.25 → 0.22, Caucasian 0.12 → 0.10), though the ~2× gap between groups remains. Same lesson as the notebook: a feature can help one model family and not another, so measure, don't assume.
+
+
+
+### Feature selection
+
+From week 8 the pipeline can put a learned selection step between preprocessing and the model. The `VoteSelector` fits three models on the training rows of each fold: a random forest and gradient boosting vote for every feature with above-average importance, and an L1-penalised logistic regression votes for every feature it doesn't shrink to zero. A feature is kept with at least `min_votes` votes. Because it looks at the labels, it is part of the Pipeline and re-fit inside every fold (and every trial); `min_votes` is tuned with the model's hyperparameters, so the number reported is still nested CV.
+
+Same rules as before: development set only, the same 5 folds, Optuna with 30 trials and 5 inner folds, engineered features included. Both runs are XGBoost, tuned, identical except for `feature_selection.enabled`.
+
+| XGBoost (tuned) | Untuned: CV ROC-AUC | Tuned: nested CV ROC-AUC (mean ± std) | Features used |
+|---|---|---|---|
+| Without selection | 0.723 | 0.728 ± 0.014 | all 13 |
+| With selection | 0.720 | 0.726 ± 0.010 | 3 (`min_votes` chosen per outer fold: 1, 2, 2, 1, 1; 2 on all development rows) |
+
+Corrected paired t-test (with − without): difference −0.002, with selection better in 1 of 5 folds, p = 0.38.
+
+Features kept by the final model: `age`, `priors_count`, `priors_per_adult_year`.
+
+The smaller model is as good: dropping 10 of the 13 features costs 0.002 ROC-AUC, far less than the fold-to-fold std (~0.013), and the corrected test can't separate the two (p = 0.38), even though the full model wins in 4 of 5 folds. The three features kept are the ones that have carried the model since week 2 (age and prior record), plus the engineered `priors_per_adult_year` from week 6, which combines them. The chosen `min_votes` changes between outer folds (1 in three folds, 2 in two), so the features with only one vote don't make a clear difference either way. I would keep selection on: for the same score, a model on 3 features is much easier to explain and to audit for fairness (the false positive rates by race barely move: African-American 0.28 vs 0.29, Caucasian 0.15 vs 0.16), and it does not use `sex` or the charge degree at all.
+
 
 
 ## Environment setup
