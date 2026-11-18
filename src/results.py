@@ -35,13 +35,16 @@ def save_run(results_dir: str, run: str, config: dict, report_text: str) -> str:
                       f"random_state={selection.get('random_state')}"
                       + ("  (min_votes tuned)" if tuning.get("enabled") else "") + "\n"
                       ) if selection.get("enabled") else "Feature selection: off\n"
-    
+
+    imputation = config["preprocessing"].get("imputation", {})      # week 10
     cv = config["cv"]
     header = (
         f"Run: {run}\n"
         f"Model: {config['model']['type']}  params={config['model'].get('params')}\n"
         f"Preprocessing: encoder={config['preprocessing']['encoder']}  "
-        f"scaler={config['preprocessing']['scaler']}\n"
+        f"scaler={config['preprocessing']['scaler']}  "
+        f"numeric imputer={imputation.get('numeric_strategy', 'median')} (after scaling)  "
+        f"categorical imputer={imputation.get('categorical_strategy', 'most_frequent')}\n"
         f"CV: {cv['n_splits']} stratified folds  shuffle={cv.get('shuffle', True)}  "
         f"random_state={cv.get('random_state')}\n"
         f"Metrics: {', '.join(cv['metrics'])}  (selection metric: {cv['selection_metric']})\n"

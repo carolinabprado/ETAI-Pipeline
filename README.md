@@ -167,6 +167,22 @@ Added three new models: gradient boosting, HistGradientBoosting (the same algori
   Selection keeps 8 of 37 features and none of the 25 anonymous v columns; dropping them raised ROC-AUC from 0.905 to 0.913
   Tuning didn't help here (0.908 vs 0.913 untuned, inside the fold-to-fold std of ~0.015): the config's default XGBoost was already good on this data. All three runs reach the targets (ROC-AUC >= 0.90, accuracy >= 0.855, F1 >= 0.66)
 
+  Week 10: 18/Nov Practical Class
+
+  Missing values: where the gaps are, why rows can't just be deleted (a deployed model can't delete a person), and the label trap
+  Label trap: filling gaps with the mean of each class, on all rows, leaks the label (ROC-AUC 0.724 -> 0.790 in the class notebook) and can't run on new people, who have no label. Our imputers learn only from the features
+  The numeric imputer is now chosen in the config (preprocessing.imputation.numeric_strategy): median, mean, knn, iterative (MICE, one completed dataset) or random_forest (missForest idea)
+  Numeric columns are now scaled first, then imputed (KNN needs every column on one scale); with the median this gives exactly the same numbers as before
+  The imputer is printed, saved in the report header and in a new imputer column of the scoreboard
+  ex on the results (ROC-AUC, xgboost, untuned, CV):
+    median          0.723 (std 0.016)   F1 0.607
+    mean            0.723 (std 0.016)   F1 0.606
+    knn             0.723 (std 0.014)   F1 0.611
+    iterative       0.724 (std 0.016)   F1 0.612
+    random_forest   0.723 (std 0.013)   F1 0.606   by far the slowest
+  All tied: the numeric imputer only sees the numeric columns, and they say little about each other, so no model-based imputer guesses much better than the median. Kept the median.
+
+
 # Baseline Predictive Pipeline -- ETAI
 
 This is the **starting point** for your semester project: a small but *complete* predictive pipeline -- every piece a real project needs (entry point, config, data loading, preprocessing, model, evaluation), just kept as simple as possible for now.
@@ -215,6 +231,7 @@ This table is updated after each practical class, so you can always see what cha
 | 7 | Boosting + evaluation metrics | `src/model.py` gains `gradient_boosting`, `hist_gradient_boosting` and `naive_bayes`; `cv.metrics` (8 metrics) and `cv.selection_metric` (ROC-AUC) in `config.yaml`; `src/evaluate.py` keeps out-of-fold probabilities, scores every metric and adds `corrected_paired_test()` (Nadeau & Bengio); tuning and nested CV maximise the selection metric; a no-model floor (dummy, same folds) on every run; `src/results.py` adds the scoreboard (`results/runs.csv`, one row per run) and a confusion matrix in the report. |
 | 8 | XGBoost + feature selection | `src/model.py` gains `xgboost` (`XGBClassifier`) and a `VoteSelector` (random forest, gradient boosting and L1 logistic regression vote; features with at least `min_votes` votes are kept); `build_pipeline()` takes `selection_config` and `memory` and adds a `"select"` step between `"prep"` and `"model"`; `config.yaml` gains a `feature_selection` section (`select__min_votes` tuned with the model) and an `xgboost` search space (incl. `gamma`, `reg_alpha`); `main.py` caches the fitted steps in a temporary folder per run, prints the features kept and adds a `feature_selection` column to the scoreboard; the report header records the selection setting; `xgboost` added to `requirements.txt`. |
 | 9 | Beyond COMPAS (option A: Adult income) | `main.py` takes the config file as an argument (default `config.yaml`); new `config_adult.yaml`; `src/preprocessing.py` gains `_placeholders_to_nan()` (placeholder tokens → NaN in every text column, not only those in `canonical_categories`) and `split_features_target()` reads the benchmark column from the config; `fairness_report()` compares with an existing score only if `data.benchmark_score` is set; `add_engineered_features()` runs only with `preprocessing.engineered_features: true`; `output.scoreboard` per config; new `src/predict.py` predicts the rows of `predict.path` after the final refit (rows out = rows in). The COMPAS run is unchanged. |
+| 10 | Missing values | `src/preprocessing.py` gains `_NUMERIC_IMPUTERS` (`median`, `mean`, `knn` = `KNNImputer`, `iterative` = `IterativeImputer` (MICE, one completed dataset), `random_forest` = `IterativeImputer` with a `RandomForestRegressor` (missForest idea)), all learned from the features only; `build_preprocessor()` now scales the numeric columns first and then imputes with `imputation.numeric_strategy`; `config.yaml` / `config_adult.yaml` gain `numeric_strategy`, `n_neighbors`, `max_iter`, `n_estimators`; `main.py` prints the imputer and adds an `imputer` column to the scoreboard; the report header records both imputers. The default (median) gives the same numbers as before. |
 
 ## Preprocessing decisions
 
@@ -380,6 +397,24 @@ The 2,000 people in `adult_new.csv` are predicted by the final (tuned, refit) mo
 
 The hardest assumption to find was the placeholder one: nothing crashed, the model trained, and `?` simply became one more category of `workclass`, `occupation` and `native_country`. Only the cleaning check (missing counts) showed it. The other breaks were loud `KeyError`s pointing straight at a COMPAS column. What got the pipeline to the targets was mostly the data, not the model: the right columns out (`fnlwgt`, `education`), the missingness flags, and above all feature selection, which dropped all 25 anonymous `v` columns and raised ROC-AUC from 0.905 to 0.913 without any tuning. Tuning then didn't add anything (0.908 nested vs 0.913 untuned, a difference well inside the fold-to-fold std): the default XGBoost from the COMPAS config was already a good fit, and the tuned run still clears all three targets. In the fairness report, the model flags women who earn ≤ 50K far less often than men (false positive rate 0.03 vs 0.08, with selection, untuned), which mostly follows the different base rates in the data.
 
+
+### Missing values (week 10)
+
+Deleting rows with a gap would keep 84% of the development set, and it isn't an option anyway: a deployed model can't delete a person, so the pipeline must know how to fill gaps. Gaps that carry information (`priors_count`, `c_charge_degree` for COMPAS; `workclass`, `occupation` for Adult) also get a `<col>_was_missing` flag, so filling them doesn't erase that signal.
+
+Methods that fill a gap using the label (mean/mode by class, random-forest proximities) are not used: in cross-validation they leak the label (filling by class on all rows took ROC-AUC from 0.724 to 0.790 in the class notebook, which is not a real improvement), and at prediction time there is no label to fill with. Every imputer in the pipeline learns from the feature columns only, inside each fold.
+
+The numeric imputer is set in `preprocessing.imputation.numeric_strategy`. Numeric columns are scaled first (scalers ignore gaps when they learn the scale), so KNN compares columns on one scale.
+
+| `numeric_strategy` | What it is | ROC-AUC (XGBoost, untuned, 5-fold CV) |
+|---|---|---|
+| `median` (default) | `SimpleImputer(strategy="median")` | 0.723 ± 0.016 |
+| `mean` | `SimpleImputer(strategy="mean")` | 0.723 ± 0.016 |
+| `knn` | `KNNImputer(n_neighbors=5)` | 0.723 ± 0.014 |
+| `iterative` | `IterativeImputer` (MICE, one completed dataset) | 0.724 ± 0.016 |
+| `random_forest` | `IterativeImputer` + `RandomForestRegressor` (missForest idea) | 0.723 ± 0.013 (by far the slowest) |
+
+They are all tied (differences of at most 0.001, against a fold-to-fold std of ~0.015). A model-based imputer is only as good as the columns it can see: ours only sees the numeric columns, which say little about each other (the number of juvenile charges barely tells you someone's age). In the class notebook, letting the imputers also see `age_cat` halved their error on `age`, while the median couldn't use it. The median stays the default: same score, simplest and fastest. (`iterative` and `random_forest` print a `ConvergenceWarning`: after `max_iter: 10` rounds the filled values still move a little. Harmless here, since the scores don't change.)
 
 
 ## Environment setup
