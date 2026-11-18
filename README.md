@@ -148,6 +148,24 @@ Added three new models: gradient boosting, HistGradientBoosting (the same algori
   With only 3 of the 13 features, XGBoost is almost as good (-0.002, well inside the fold-to-fold std of ~0.013), and the corrected test can't tell them apart (p = 0.38).
   Tuned XGBoost without selection is now the top of the scoreboard (0.728), but it is tied with the other ensembles from week 7 (0.726-0.727).
 
+  Week 9: 11/Nov Practical Class
+
+  Made the pipeline work beyond COMPAS (option A: the Adult income data, still a yes/no question)
+  main.py now takes the config file as an argument: python main.py (COMPAS, as before) or python main.py config_adult.yaml
+  New config_adult.yaml with its own data, diagnostics, preprocessing and output sections; CV, models and search spaces unchanged
+  Fixed what only worked for COMPAS: engineered features switched on per config, "?" placeholders become missing in every text column (not only the ones with spelling fixes), the fairness report compares with COMPAS's own score only when the data has one
+  New src/predict.py: after the final refit, the 2,000 new people in adult_new.csv are predicted (same cleaning, no rows dropped) and saved to predictions/adult_new_predictions.csv
+  The COMPAS run gives exactly the same numbers as before
+  ex on the results (Adult, xgboost, CV on the development set):
+    without selection, untuned
+      ROC-AUC 0.905   accuracy 0.858   F1 0.664   (37 features)
+    with selection, untuned
+      ROC-AUC 0.913   accuracy 0.864   F1 0.686   (8 features)
+    with selection, tuned (nested CV)
+      ROC-AUC 0.908 (std 0.014)   accuracy 0.857   F1 0.664   (8 features)
+      Chosen: n_estimators 299, learning_rate 0.161, max_depth 3, gamma 3.02, min_votes 1
+  Selection keeps 8 of 37 features and none of the 25 anonymous v columns; dropping them raised ROC-AUC from 0.905 to 0.913
+  Tuning didn't help here (0.908 vs 0.913 untuned, inside the fold-to-fold std of ~0.015): the config's default XGBoost was already good on this data. All three runs reach the targets (ROC-AUC >= 0.90, accuracy >= 0.855, F1 >= 0.66)
 
 # Baseline Predictive Pipeline -- ETAI
 
@@ -196,6 +214,7 @@ This table is updated after each practical class, so you can always see what cha
 | 6 | Ensembles in depth -- random forest, oblique random forest, AdaBoost | `src/model.py` gains `oblique_random_forest()` (a `BaggingClassifier` of oblique trees: `SparseRandomProjection` → `DecisionTreeClassifier`, so every split is a random linear combination of features) and `adaboost()` (`AdaBoostClassifier` over trees of depth `max_depth`, 1 = stumps), both registered in `_MODELS`; `config.yaml`'s `model` section now runs the random forest (`n_estimators: 200`, fixed -- more trees never overfit) with the other models as commented examples, and `tuning.search_spaces` gains `oblique_random_forest` and `adaboost` while the random forest's space is redone (tree size + `max_features`, no longer `n_estimators`); Challenge 1: new `add_engineered_features()` in `src/preprocessing.py`, called in `main.py` before `split_features_target()`, adding three fixed-formula features (`priors_per_adult_year`, `has_juvenile_record`, `juv_felony_share`) listed in `preprocessing.numeric_features`. No new packages. |
 | 7 | Boosting + evaluation metrics | `src/model.py` gains `gradient_boosting`, `hist_gradient_boosting` and `naive_bayes`; `cv.metrics` (8 metrics) and `cv.selection_metric` (ROC-AUC) in `config.yaml`; `src/evaluate.py` keeps out-of-fold probabilities, scores every metric and adds `corrected_paired_test()` (Nadeau & Bengio); tuning and nested CV maximise the selection metric; a no-model floor (dummy, same folds) on every run; `src/results.py` adds the scoreboard (`results/runs.csv`, one row per run) and a confusion matrix in the report. |
 | 8 | XGBoost + feature selection | `src/model.py` gains `xgboost` (`XGBClassifier`) and a `VoteSelector` (random forest, gradient boosting and L1 logistic regression vote; features with at least `min_votes` votes are kept); `build_pipeline()` takes `selection_config` and `memory` and adds a `"select"` step between `"prep"` and `"model"`; `config.yaml` gains a `feature_selection` section (`select__min_votes` tuned with the model) and an `xgboost` search space (incl. `gamma`, `reg_alpha`); `main.py` caches the fitted steps in a temporary folder per run, prints the features kept and adds a `feature_selection` column to the scoreboard; the report header records the selection setting; `xgboost` added to `requirements.txt`. |
+| 9 | Beyond COMPAS (option A: Adult income) | `main.py` takes the config file as an argument (default `config.yaml`); new `config_adult.yaml`; `src/preprocessing.py` gains `_placeholders_to_nan()` (placeholder tokens → NaN in every text column, not only those in `canonical_categories`) and `split_features_target()` reads the benchmark column from the config; `fairness_report()` compares with an existing score only if `data.benchmark_score` is set; `add_engineered_features()` runs only with `preprocessing.engineered_features: true`; `output.scoreboard` per config; new `src/predict.py` predicts the rows of `predict.path` after the final refit (rows out = rows in). The COMPAS run is unchanged. |
 
 ## Preprocessing decisions
 
@@ -314,6 +333,52 @@ Corrected paired t-test (with − without): difference −0.002, with selection 
 Features kept by the final model: `age`, `priors_count`, `priors_per_adult_year`.
 
 The smaller model is as good: dropping 10 of the 13 features costs 0.002 ROC-AUC, far less than the fold-to-fold std (~0.013), and the corrected test can't separate the two (p = 0.38), even though the full model wins in 4 of 5 folds. The three features kept are the ones that have carried the model since week 2 (age and prior record), plus the engineered `priors_per_adult_year` from week 6, which combines them. The chosen `min_votes` changes between outer folds (1 in three folds, 2 in two), so the features with only one vote don't make a clear difference either way. I would keep selection on: for the same score, a model on 3 features is much easier to explain and to audit for fairness (the false positive rates by race barely move: African-American 0.28 vs 0.29, Caucasian 0.15 vs 0.16), and it does not use `sex` or the charge degree at all.
+
+### Beyond COMPAS (week 9, option A: Adult income)
+
+Until week 8 the pipeline had only seen COMPAS. To find what quietly depended on it, it now also runs on the Adult income data (1994 US Census, 6,000 people: does this person earn more than 50,000 USD a year?), with its own config file:
+
+```bash
+python main.py                      # COMPAS, config.yaml (unchanged)
+python main.py config_adult.yaml    # Adult: results in results_adult/, predictions in predictions/
+
+### Beyond COMPAS (week 9, option A: Adult income)
+
+Until week 8 the pipeline had only seen COMPAS. To find what quietly depended on it, it now also runs on the Adult income data (1994 US Census, 6,000 people: does this person earn more than 50,000 USD a year?), with its own config file:
+
+```bash
+python main.py                      # COMPAS, config.yaml (unchanged)
+python main.py config_adult.yaml    # Adult: results in results_adult/, predictions in predictions/
+```
+
+**What broke, why, and the fix**
+
+| What broke | Why | Fix |
+|---|---|---|
+| No way to run another config | `load_config()` always read `config.yaml` | `main.py` takes the config path as an argument |
+| `KeyError: 'priors_count'` | `add_engineered_features()` uses COMPAS's columns and always ran | `preprocessing.engineered_features` (true for COMPAS, false for Adult) |
+| `?` kept as a category, **silently** | `_canonicalize_categories()` only turned placeholders into NaN in the columns listed in `canonical_categories`; `workclass`, `occupation` and `native_country` need no spelling fixes, so they were never listed | `_placeholders_to_nan()` runs on every text column (missing counts now 379, 381, 86, as expected) |
+| `KeyError: 'score_text'` in the fairness report | it always compared with COMPAS's own score | `data.benchmark_score` in the config; no benchmark, no comparison |
+| `age: {min: 18}` would erase 74 valid 17-year-olds | the validity rules were COMPAS's | Adult's own rules: `age` 17–90, `hours_per_week` 1–99, capital gain/loss ≥ 0 |
+| Runs of both datasets on one scoreboard | one `results/runs.csv` | `output.results_dir` and `output.scoreboard` per config |
+| No way to predict new people | the pipeline only evaluated | `src/predict.py` + a `predict` section in the config |
+
+**Data decisions (`config_adult.yaml`).** Audited attribute: `sex`. `race` is kept out of the model too, as the other protected attribute. Not features: `id`, `fnlwgt` (a census sampling weight, not a trait of the person) and `education` (one to one with `education_num`). All 25 undocumented `v01`–`v25` columns are features, and feature selection decides. `workclass` and `occupation` get a missingness flag (people with an unknown job earn > 50K half as often); the `?` in `native_country` and the gaps in `v01`–`v06` are only imputed. `capital_gain = 99999` is the census top code, kept as a real value. Target encoding, as for COMPAS (one-hot turns `native_country`'s 41 values into ~40 columns and scored lower, 0.904).
+
+**Results** (XGBoost, development set, 5 folds; targets: ROC-AUC ≥ 0.90, accuracy ≥ 0.855, F1 ≥ 0.66):
+
+| Run | ROC-AUC | Accuracy | F1 | Features used |
+|---|---|---|---|---|
+| No model (always "≤ 50K") | 0.500 | 0.76 | 0.00 | – |
+| Without selection, untuned | 0.905 | 0.858 | 0.664 | all 37 |
+| With selection, untuned | 0.913 | 0.864 | 0.686 | 8 |
+| **With selection, tuned (nested CV, final)** | **0.908 ± 0.014** | **0.857** | **0.664** | 8 |
+
+Features kept by the final model: `age`, `education_num`, `capital_gain`, `capital_loss`, `hours_per_week`, `marital_status`, `occupation`, `relationship` (none of the `v` columns).
+
+The 2,000 people in `adult_new.csv` are predicted by the final (tuned, refit) model: `predictions/adult_new_predictions.csv` (`id`, `probability`, `prediction` at threshold 0.5; 19.1% predicted > 50K, close to the 24% base rate).
+
+The hardest assumption to find was the placeholder one: nothing crashed, the model trained, and `?` simply became one more category of `workclass`, `occupation` and `native_country`. Only the cleaning check (missing counts) showed it. The other breaks were loud `KeyError`s pointing straight at a COMPAS column. What got the pipeline to the targets was mostly the data, not the model: the right columns out (`fnlwgt`, `education`), the missingness flags, and above all feature selection, which dropped all 25 anonymous `v` columns and raised ROC-AUC from 0.905 to 0.913 without any tuning. Tuning then didn't add anything (0.908 nested vs 0.913 untuned, a difference well inside the fold-to-fold std): the default XGBoost from the COMPAS config was already a good fit, and the tuned run still clears all three targets. In the fairness report, the model flags women who earn ≤ 50K far less often than men (false positive rate 0.03 vs 0.08, with selection, untuned), which mostly follows the different base rates in the data.
 
 
 

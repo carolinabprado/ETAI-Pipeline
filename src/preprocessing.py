@@ -62,7 +62,15 @@ def _canonicalize_categories(df: pd.DataFrame, columns_and_maps: dict, placehold
         out.loc[out[col].astype(str).str.strip().isin(placeholder_tokens), col] = np.nan
     return out
 
-
+def _placeholders_to_nan(df: pd.DataFrame, placeholder_tokens: set) -> pd.DataFrame:
+    """Week 9: a placeholder token ("?", "n/a", ...) in ANY text column becomes NaN, not only in
+    the columns listed in canonical_categories (Adult's `?` sits in workclass, occupation and
+    native_country, which need no spelling fixes)."""
+    out = df.copy()
+    for col in out.columns:
+        if pd.api.types.is_object_dtype(out[col]) or pd.api.types.is_string_dtype(out[col]):
+            out[col] = out[col].where(~out[col].astype(str).str.strip().isin(placeholder_tokens))
+    return out
 
 def clean_dataset(df: pd.DataFrame, diagnostics_config: dict) -> pd.DataFrame:
     """
@@ -81,6 +89,7 @@ def clean_dataset(df: pd.DataFrame, diagnostics_config: dict) -> pd.DataFrame:
     flag_invalid_values(out, diagnostics_config.get("validity_rules", {}))
 
     out = _canonicalize_categories(out, diagnostics_config.get("canonical_categories", {}), placeholder_tokens)
+    out = _placeholders_to_nan(out, placeholder_tokens)      # week 9: every text column, not just the listed ones
 
     columns_to_drop = [c for c in diagnostics_config.get("redundant_columns", []) if c in out.columns]
     out = out.drop(columns=columns_to_drop)
@@ -119,11 +128,12 @@ def split_features_target(df: pd.DataFrame, data_config: dict, mnar_indicator_so
     target = data_config["target"]
     sensitive_attr = data_config["sensitive_attr"]
     drop_columns = data_config.get("drop_columns", [])
+    benchmark = (data_config.get("benchmark_score") or {}).get("column")    # week 9: COMPAS's score_text, or none
 
     df = add_missingness_indicators(df, mnar_indicator_sources)
     y = df[target] if target in df.columns else None
 
-    extras_cols = [c for c in [sensitive_attr, "score_text"] if c in df.columns]
+    extras_cols = [c for c in [sensitive_attr, benchmark] if c and c in df.columns]
     extras = df[extras_cols].copy() if extras_cols else None
 
     always_drop = set(drop_columns) | {target, sensitive_attr}

@@ -2,7 +2,8 @@
 Entry point for the baseline predictive pipeline.
 
 Run with:
-    python main.py
+    python main.py                      # COMPAS, config.yaml
+    python main.py config_adult.yaml    # week 9: any other config file
 
 This orchestrates the full pipeline:
     load config -> load data -> diagnose/clean (week 3) -> drop duplicate rows (training only, week 4)
@@ -23,6 +24,11 @@ import optuna
 import yaml
 from sklearn.model_selection import StratifiedKFold
 
+import os
+import shutil
+import sys
+import tempfile
+
 from src.data import load_data
 from src.evaluate import (
     build_scorers, cross_validate_pipeline, cv_report, oof_classification_report, fairness_report,
@@ -33,6 +39,7 @@ from src.preprocessing import (
 )
 from src.results import save_run, save_scores
 from src.tuning import tune_pipeline, nested_cross_validate, tuning_report
+from src.predict import predict_new_rows
 
 
 def load_config(path: str = "config.yaml") -> dict:
@@ -40,8 +47,8 @@ def load_config(path: str = "config.yaml") -> dict:
         return yaml.safe_load(f)
 
 
-def main():
-    config = load_config()
+def main(config_path: str = "config.yaml"):
+    config = load_config(config_path)
     run = datetime.now().strftime("%Y%m%d_%H%M%S")
     model_type = config["model"]["type"]
 
@@ -51,7 +58,8 @@ def main():
     df_clean = clean_dataset(df_raw, config["diagnostics"])
     # training data only: the same person must not count twice, or sit in both dev and test
     df_clean = drop_duplicate_rows(df_clean, config["diagnostics"].get("id_column"))
-    df_clean = add_engineered_features(df_clean)        # week 6: fixed formulas, nothing learned
+    if config["preprocessing"].get("engineered_features", False):
+        df_clean = add_engineered_features(df_clean)    # week 6: fixed formulas (COMPAS columns), nothing learned
 
     mnar_sources = config["preprocessing"].get("mnar_indicator_sources", [])
     X, y, extras = split_features_target(df_clean, config["data"], mnar_sources)
@@ -70,6 +78,7 @@ def main():
     selection_metric = cv_config["selection_metric"]
     scorers = build_scorers(metrics)
     n_jobs = cv_config.get("n_jobs", 1)
+    print(f"Config: {config_path}   |   data: {config['data']['path']}   |   target: {config['data']['target']}")
     print(f"Model: {model_type}   |   selection metric: {selection_metric}   |   "
           f"{cv_config['n_splits']}-fold CV")
     print(f"Data:  {len(X_dev)} development rows   |   {len(X_test)} test rows locked away (not used)")
@@ -89,12 +98,14 @@ def main():
     fold_scores, oof_proba = cross_validate_pipeline(pipeline, X_dev, y_dev, cv, scorers, selection_metric, n_jobs)
     floor, untuned = floor_scores["validation"].mean(), fold_scores["validation"].mean()
 
-    print("\nDefault hyperparameters (config.yaml)")
+    print(f"\nDefault hyperparameters ({config_path})")
     print(f"  {selection_metric}: {untuned:.3f} ± {fold_scores['validation'].std(ddof=1):.3f}   "
           f"train-validation gap: {fold_scores['gap'].mean():+.3f}   no-model floor: {floor:.3f}")
-    report = (f"Hyperparameters from config.yaml: {config['model'].get('params')}\n\n"
+    report = (f"Hyperparameters from {config_path}: {config['model'].get('params')}\n\n"
               + cv_report(fold_scores, metrics, selection_metric, "Cross-validation")
               + f"\n\nNo-model floor (dummy, same folds): {selection_metric} = {floor:.3f}")
+    report += "\n" + fairness_report(y_dev, oof_proba, extras_dev, sensitive_attr=config["data"]["sensitive_attr"],
+                                     benchmark=config["data"].get("benchmark_score"))
     final_scores = fold_scores
 
     tuning_config = config.get("tuning", {})
@@ -170,10 +181,21 @@ def main():
     print(f"\nScoreboard (runs on the same data and metric; best first)\n{board}")
     report += f"\nScoreboard:\n{board}\n"
 
+    # week 9: predict the new people (no target) with the refit pipeline, if the config asks for it
+    predict_config = config.get("predict")
+    if predict_config:
+        predictions = predict_new_rows(pipeline, config)
+        os.makedirs(os.path.dirname(predict_config["output"]) or ".", exist_ok=True)
+        predictions.to_csv(predict_config["output"], index=False)
+        predicted_line = (f"Predictions: {len(predictions)} rows from {predict_config['path']} -> "
+                          f"{predict_config['output']}  (share predicted 1: {predictions['prediction'].mean():.3f})")
+        report += predicted_line + "\n"
+        print(f"\n{predicted_line}")
+
     path = save_run(config.get("output", {}).get("results_dir", "results"), run, config, report)
     shutil.rmtree(cache_dir, ignore_errors=True)       # week 8: delete this run's cache folder
     print(f"\n{refit}\n{kept_line}\nFull report (per-fold tables, tuning, confusion matrix, fairness): {path}")
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1] if len(sys.argv) > 1 else "config.yaml")
