@@ -89,6 +89,8 @@ def main(config_path: str = "config.yaml"):
     selection_enabled = selection_config.get("enabled", False)
     selection = f"vote(min_votes={selection_config.get('min_votes', 2)})" if selection_enabled else "off"
     print(f"Feature selection: {selection}")
+    imputer = config["preprocessing"].get("imputation", {}).get("numeric_strategy", "median")    # week 10
+    print(f"Numeric imputer: {imputer} (after scaling)")
     cache_dir = tempfile.mkdtemp(prefix="pipeline_cache_")
     pipeline = build_pipeline(config["preprocessing"], config["model"], selection_config, memory=cache_dir)
 
@@ -166,17 +168,16 @@ def main(config_path: str = "config.yaml"):
     # week 7: the scoreboard -- one row per run, with the floor and the untuned score on the same folds
     row = {"run": run, "data": config["data"]["path"], "model": model_type, "tuned": tuning_enabled,
            "encoder": config["preprocessing"]["encoder"], "scaler": config["preprocessing"]["scaler"],
-           "feature_selection": selection,
+           "feature_selection": selection, "imputer": imputer,
            "params": str(config["model"].get("params")), "tuned_params": str(study.best_params) if tuning_enabled else "",
            "metric": selection_metric, "mean": final_scores["validation"].mean(),
            "std": final_scores["validation"].std(ddof=1), "untuned": untuned, "floor": floor,
            **{f"fold_{i}": score for i, score in enumerate(final_scores["validation"], start=1)}}
     runs = save_scores(config.get("output", {}).get("scoreboard", "results/runs.csv"), row)
     same = runs[(runs["data"] == row["data"]) & (runs["metric"] == selection_metric)]
-    board = (same.fillna({"feature_selection": "off"})          # runs before week 8 had no selection
+    board = (same.fillna({"feature_selection": "off", "imputer": "median"})   # runs before week 8 / 10 had neither column
              .sort_values("mean", ascending=False)
-             [["run", "model", "tuned", "encoder", "scaler", "feature_selection", "mean", "std", "untuned", "floor"]]
-             .rename(columns={"mean": selection_metric})
+             [["run", "model", "tuned", "encoder", "scaler", "imputer", "feature_selection", "mean", "std", "untuned", "floor"]]             .rename(columns={"mean": selection_metric})
              .to_string(index=False, float_format=lambda v: f"{v:.3f}"))
     print(f"\nScoreboard (runs on the same data and metric; best first)\n{board}")
     report += f"\nScoreboard:\n{board}\n"

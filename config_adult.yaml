@@ -51,10 +51,13 @@ preprocessing:
   # the gap carries information, so it gets a flag as well as an imputed value
   mnar_indicator_sources: ["workclass", "occupation"]
   engineered_features: false     # add_engineered_features() is COMPAS-only
-  random_state: 42
-  imputation:
-    numeric_strategy: "median"
+  random_state: 42                  # target encoder's folds and (week 10) the model-based imputers
+  imputation:                       # week 10: numeric columns are scaled first, then imputed
+    numeric_strategy: "median"      # median | mean | knn | iterative | random_forest
     categorical_strategy: "most_frequent"
+    n_neighbors: 5                  # knn
+    max_iter: 10                    # iterative, random_forest
+    n_estimators: 50                # random_forest (trees per column)
 
 model:
   type: "xgboost"
